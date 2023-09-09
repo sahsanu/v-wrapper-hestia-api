@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+#script: ......... v-wrapper-hestia-api
+#author: ......... sahsanu
+#version: ........ 0.4
+#date: ........... 2023-September-10
+#compatibility: .. HestiaCP 1.8.x (it could work in previous versions but I've not tested it)
+
+#-------------------------------#
+#         Main variables        #
+#-------------------------------#
+# You must edit these variables with the right data or use a conf file
+v_host='hestia.example.com'
+v_port='8083'
+
+# New API
+v_access_key='HereYourAccessKey'
+v_secret_key='HereYourSecretKey'
+
+# Legacy API (password):
+# In this mode, user is always admin (don't change it)
+v_user='admin'
+v_password='HereYourPassword'
+
+# Legacy API (hash)
+v_hash='HereYourHash'
+
+#-------------------------------#
+#        Other variables        #
+#-------------------------------#
+# Other variables used by the script
+
+# API mode, returncode, curl and cmd variables
+# New API is the defaul API mode
+v_use_new_api=1
+v_use_legacy_hash=0
+v_use_legacy_userpass=0
+max_args=13
+returncode="no"
+curl_connect_timeout=15
+curl_max_timeout=300
+# change curl_ignore_cert value to 1 instead of 0 to ignore the host's certificate
+curl_ignore_cert=0
+cmd="${1}"
+cli_doc_url="https://raw.githubusercontent.com/hestiacp/hestiacp/main/docs/docs/reference/cli.md"
+
+# Define conf file name
+script_name="$(basename "$0")"
+name_conf_file=".${script_name}.conf"
+
+#-------------------------------#
+#              Help             #
+#-------------------------------#
+##H Usage: v-wrapper-hestia-api [-l|--list] [-u|--user-password] [-h|--hash] HESTIA_COMMAND [ARG1] [ARG2] [...] [ARG13]
+##H
+##H List Hestia commands:
+##H   v-wrapper-hestia-api [-l|--list] [search pattern]
+##H
+##H Examples:
+##H   v-wrapper-hestia-api -l
+##H   v-wrapper-hestia-api -l v-change
+##H   v-wrapper-hestia-api --list v-list
+##H   v-wrapper-hestia-api -l '.*mail'
+##H   v-wrapper-hestia-api --list 'v-.*web'
+##H
+##H New API:
+##H   v-wrapper-hestia-api hestia_command [arg1] [arg2] [...] [arg13]
+##H
+##H Legacy API (user/password):
+##H   v-wrapper-hestia-api [-u|--user-password] hestia_command [arg1] [arg2] [...] [arg13]
+##H
+##H Legacy API (hash):
+##H   v-wrapper-hestia-api [-h|--hash] hestia_command [arg1] [arg2] [...] [arg13]
+##H
+##H Examples:
+##H   v-wrapper-hestia-api v-list-users
+##H   v-wrapper-hestia-api v-list-web-domain user domain
+##H   v-wrapper-hestia-api -h v-list-web-domain user domain
+##H   v-wrapper-hestia-api --user-password v-list-users
+##H
+##H Editing connection params:
+##H You can edit the following variables inside the script:
+##H v_host, v_port, v_access_key, v_secret_key, v_user, v_password, v_hash
+##H
+##H Or you can create a config file .v-wrapper-hestia-api.conf in your $HOME
+##H or a file .v-wrapper-hestia-api.conf in the current dir (this one takes
+##H precedence over the other options).
+##H If using a conf file, the variables to be used are (keep in mind that v- prefix is not used):
+##H host, port, access_key, secret_key, user, password, hash
+##H
+
+# Message functions
+_echoerr() { echo "Error: $*" >&2; }
+
+# Show help
+_help() {
+	script="$(basename "$0")"
+	usage=$(grep '^##H' "$0")
+	echo "${usage}" | sed -r 's/^##H\s{0,1}//' | sed -r "s/v\-wrapper\-hestia\-api/${script}/"
+}
+
+# Check commands
+_checkcommands() {
+	for i in "$@"; do
+		if ! type -p "$i" &>/dev/null; then
+			_echoerr "Command \"$i\" not found."
+			_echoerr "Sorry, I can't continue, I need \"$i\" to run."
+			exit 1
+		fi
+	done
+}
+
+# Remove temp file
+_housekeeping() {
+	if [[ -f "$file_headers" ]]; then
+		rm -f "$file_headers"
+	fi
+}
+
+# Take care of signals
+# shellcheck disable=SC2317  # Don't warn about unreachable commands in this function
+_trap_exit() {
+	case "$1" in
+	INT)
+		echo "Warning: script has been interrupted by user."
+		_housekeeping
+		exit 100
+		;;
+	TERM)
+		echo "Warning: script has been terminated."
+		_housekeeping
+		exit 101
+		;;
+	*)
+		echo "Warning: script terminating on unknown signal."
+		_housekeeping
+		exit 102
+		;;
+	esac
+}
+
+# Trap signals
+trap "_trap_exit INT" INT
+trap "_trap_exit TERM" TERM HUP
+
+# Check all commands we need are available
+_checkcommands curl eval awk grep sed getent column tail
+
+#-------------------------------#
+#        List API commands      #
+#-------------------------------#
+
+_list_commands() {
+	#if echo "$cmd" | grep -q -E '^--list|^-l'; then
+	list_filter="$1"
+	if [[ -z "$list_filter" ]]; then
+		list_filter='v-'
+	fi
+	list="$(curl -sS -w '\n%{http_code}' "$cli_doc_url") "
+	if echo "$list" | tail -n1 | grep -q -E '^[0-2][0-9][0-9]'; then
+		commands='HESTIA COMMAND|DESCRIPTION|OPTIONS\n'
+		commands+='--------------|-----------|-------'
+		result_list="$(echo "${list}" | sed '$d' | grep -A4 -E "^##\s${list_filter}.*" | sed -r 's/^--|^##\s//' | sed -r '/^\s*$/d' | sed -r 's/\*\*Options\*\*:\s?\–?//' | sed 's/`//g' | paste -d '|' - - -)"
+		if [[ -n "$result_list" ]]; then
+			commands+="\n${result_list}"
+		fi
+		if [[ "$(echo -e "$commands" | wc -l)" -gt "2" ]]; then
+			echo -e "$commands" | column -s '|' -t --table-wrap 2,3
+			exit 0
+		else
+			_echoerr "Sorry but I couldn't find command using filter '${list_filter}.*'"
+			exit
+		fi
+	else
+		_echoerr "I couldn't get the command list from HestiaCP repository in GitHub"
+		_echoerr "http code received '$(echo "$list" | tail -n1)'."
+		exit 201
+	fi
+	#fi
+}
+
+# Check options
+# shellcheck disable=SC2221,SC2222
+case "$cmd" in
+-l | --list) _list_commands "$2" ;;
+-u | --user-password)
+	v_use_legacy_userpass=1
+	v_use_legacy_hash=0
+	v_use_new_api=0
+	shift
+	cmd="$1"
+	;;
+-h | --hash)
+	v_use_legacy_userpass=0
+	v_use_legacy_hash=1
+	v_use_new_api=0
+	shift
+	cmd="$1"
+	;;
+-* | --*)
+	_echoerr "Unknown option $1"
+	echo " "
+	_help
+	exit 1
+	;;
+esac
+
+# Calc current number of arguments
+narguments="$#"
+arguments="$((narguments - 1))"
+
+#-------------------------------#
+#            Checks             #
+#-------------------------------#
+
+# Check if conf file exists in user home
+conf_file="${HOME}/${name_conf_file}"
+if [[ -f "$conf_file" ]]; then
+	# shellcheck source=/dev/null
+	source "$conf_file"
+fi
+
+# Check if conf file exists in current directory (will be used instead of other conf options)
+conf_file="${name_conf_file}"
+if [[ -f "$conf_file" ]]; then
+	# shellcheck source=/dev/null
+	source "$conf_file"
+fi
+
+# Check if variables aren't empty and if have been modified
+if [[ -z $host ]]; then
+	host="$v_host"
+fi
+if [[ -z $port ]]; then
+	port="$v_port"
+fi
+if [[ -z $hash ]]; then
+	hash="$v_hash"
+fi
+if [[ -z $user ]]; then
+	user="$v_user"
+fi
+if [[ -z $password ]]; then
+	password="$v_password"
+fi
+if [[ -z $access_key ]]; then
+	access_key="$v_access_key"
+fi
+if [[ -z $secret_key ]]; then
+	secret_key="$v_secret_key"
+fi
+if [[ -z "$host" ]]; then
+	_echoerr "host variable is empty."
+	exit 201
+elif echo "$host" | grep -q '^.*example\.com'; then
+	_echoerr "$host is an example host, you must change it."
+	exit 201
+elif ! getent hosts "$host" &>/dev/null; then
+	_echoerr "$host doesn't resolve."
+	exit 201
+fi
+
+# Check that only one v_use_* variable is enabled
+if [[ "$((v_use_new_api + v_use_legacy_hash + v_use_legacy_userpass))" -ne 1 ]]; then
+	echo "v_use_new_api=$v_use_new_api"
+	echo "v_use_legacy_hash=$v_use_legacy_hash"
+	echo "v_use_legacy_userpass=$v_use_legacy_userpass"
+	echo "Error: Only one of these variables should be enabled"
+	exit 201
+fi
+
+# Check that port isn't empty and format is valid
+if [[ -z "$port" ]]; then
+	_echoerr "port variable is empty."
+	exit 201
+else
+	if ! echo "$port" | grep -q -E '^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$'; then
+		_echoerr "$port is not a valid port."
+		exit 201
+	fi
+fi
+
+# Check whether hash isn't empty and has the right format
+if [[ "$v_use_legacy_hash" -eq 1 ]]; then
+	if [[ -z "$hash" ]]; then
+		_echoerr "hash variable is empty."
+		exit 201
+	else
+		if ! echo "$hash" | grep -q -E '^(_|[A-Z]|[a-z]|-|[0-9]){32}$'; then
+			_echoerr "hash '$hash' doesn't use a valid format."
+			exit 201
+		fi
+	fi
+fi
+
+# Check whether user and password aren't empty and have the right format
+if [[ "$v_use_legacy_userpass" -eq 1 ]]; then
+	if [[ -z "$user" ]]; then
+		_echoerr "user variable is empty."
+		exit 201
+	else
+		if [[ "$user" != "admin" ]]; then
+			_echoerr "user '$user' is not valid, user MUST be admin."
+			exit 201
+		fi
+	fi
+	if [[ -z "$password" ]]; then
+		_echoerr "password variable is empty."
+		exit 201
+	else
+		if [[ "$password" = "HereYourPassword" ]]; then
+			_echoerr "you must modify password '$password'."
+			exit 201
+		fi
+	fi
+fi
+
+# Check whether access_key and secret_key aren't empty and have the right format
+if [[ "$v_use_new_api" -eq 1 ]]; then
+	if [[ -z "$access_key" ]]; then
+		_echoerr "access_key variable is empty."
+		exit 201
+	else
+		if ! echo "$access_key" | grep -q -E '^[[:alnum:]]{20}$'; then
+			_echoerr "access_key '$access_key' doesn't use a valid format."
+			exit 201
+		fi
+	fi
+	if [[ -z "$secret_key" ]]; then
+		_echoerr "secret_key variable is empty."
+		exit 201
+	else
+		if ! echo "$secret_key" | grep -q -E '^[[:alnum:]|_|\.|\+|/|\^|~|=|%|\-]{40}$'; then
+			_echoerr "secret_key doesn't use a valid format."
+			exit 201
+		fi
+	fi
+fi
+
+# Check whether cmd is empty or whether command has the valid Hestia format (v-*)
+if [[ -z "$cmd" ]]; then
+	_help
+	exit
+elif ! echo "$cmd" | grep -q '^v-'; then
+	_echoerr "$cmd doesn't seem a valid Hestia command."
+	exit 203
+fi
+
+# Check number of arguments
+if [[ $arguments -gt $max_args ]]; then
+	_echoerr "Only allowed the Hestia command and $max_args additional"
+	_echoerr "arguments but you are using $arguments additional arguments."
+	exit 202
+fi
+
+#-------------------------------#
+#            Actions            #
+#-------------------------------#
+
+# Get arguments dynamically and create arg_data
+arg_data=""
+if [[ "$arguments" -gt 0 ]]; then
+	i=1
+	while [[ $i -le "$arguments" ]]; do
+		z=$((i + 1))
+		# shellcheck disable=SC1083
+		arg_data="${arg_data},\"arg${i}\":\"$(eval echo \${$z})\""
+		((++i))
+	done
+fi
+
+# API call
+
+# Define api url variable
+api_url="https://${host}:${port}/api/"
+
+# Check if we should ignore the host's certificate
+if [[ $curl_ignore_cert -eq 1 ]]; then
+	ignore_cert='-k'
+else
+	ignore_cert=''
+fi
+
+# Create temp file to save headers
+if ! file_headers="$(mktemp --suffix=_hestia_api)"; then
+	_echoerr "I couldn't create temp file to save headers."
+	exit 205
+fi
+
+# Get return code from hestia-exit-code header
+_check_hestia_exit_code() {
+	if grep -q -E '^hestia-exit-code:\s{1,}[0-9]{1,}' "$file_headers"; then
+		rc="$(awk '/hestia-exit-code/ {print $2}' "$file_headers" | sed 's/\r//')"
+		_housekeeping
+		exit "$rc"
+	else
+		_housekeeping
+		echo ""
+		_echoerr "I couldn't get hestia-exit-code header from API response."
+		exit 204
+	fi
+}
+
+# Create auth variable for different API modes
+if [[ "$v_use_new_api" -eq 1 ]]; then
+	auth="\"access_key\":\"${access_key}\",\"secret_key\":\"${secret_key}\""
+fi
+if [[ "$v_use_legacy_hash" -eq 1 ]]; then
+	auth="\"hash\":\"${hash}\""
+fi
+if [[ "$v_use_legacy_userpass" -eq 1 ]]; then
+	auth="\"user\":\"${user}\",\"password\":\"${password}\""
+fi
+
+# Launch API call
+if curl -sS ${ignore_cert} -X POST --connect-timeout "${curl_connect_timeout}" -m "${curl_max_timeout}" -D "$file_headers" -d "{""${auth}"",\"returncode\":\"${returncode}\",\"cmd\":\"${cmd}\"""${arg_data}""}" "${api_url}"; then
+	if [[ "$v_use_new_api" -eq 1 ]]; then
+		_check_hestia_exit_code
+	else
+		_housekeeping
+	fi
+else
+	echo ""
+	_echoerr "Something wrong happened with curl command."
+	exit 204
+fi
