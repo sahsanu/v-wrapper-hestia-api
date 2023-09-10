@@ -1,6 +1,65 @@
 ## v-wrapper-hestia-api
 This is an utility to interact with Hestia API. It is a bash script that uses curl to perform the API calls and you just need to add the command you want to use and its arguments as parameters.
 
+### Install:
+
+**With git clone**
+```
+cd ~
+git clone https://github.com/sahsanu/v-wrapper-hestia-api.git
+sudo cp v-wrapper-hestia-api/v-wrapper-hestia-api /usr/local/bin/
+```
+
+**With curl**
+```
+sudo curl -s https://raw.githubusercontent.com/sahsanu/v-wrapper-hestia-api/main/v-wrapper-hestia-api -o /usr/local/bin/v-wrapper-hestia-api
+sudo chmod 755 /usr/local/bin/v-wrapper-hestia-api
+```
+
+**With wget**
+```
+sudo wget https://raw.githubusercontent.com/sahsanu/v-wrapper-hestia-api/main/v-wrapper-hestia-api -O /usr/local/bin/v-wrapper-hestia-api
+sudo chmod 755 /usr/local/bin/v-wrapper-hestia-api
+```
+
+### Configure options to be used by the script (host, port and credentials):
+
+Create and edit file `~/.v-wrapper-hestia-api.conf`
+
+For **New API** add the following variables with your own data:
+```
+host='hestiacp.example.com'
+port='8083'
+access_key='HereYourAccessKey'
+secret_key='HereYourSecretKey'
+```
+
+For **Legacy API (user/password)** add the following variables with your own data (user will be always admin):
+```
+host='hestiacp.example.com'
+port='8083'
+user='admin'
+password='HereYourPassword'
+```
+
+For **Legacy API (hash)** add the following variables with your own data:
+```
+host='hestiacp.example.com'
+port='8083'
+hash='HereYourHash'
+```
+
+For **ALL API modes** you can add all the variables and the script will use the correct ones depending on the options that have been used:
+```
+host='hestiacp.example.com'
+port='8083'
+access_key='HereYourAccessKey'
+secret_key='HereYourSecretKey'
+user='admin'
+password='HereYourPassword'
+hash='HereYourHash'
+```
+
 ### Usage:
 
 `v-wrapper-hestia-api [-l|--list] [-u|--user-password] [-h|--hash] HESTIA_COMMAND [ARG1] [ARG2] [...] [ARG13]`
