@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #script: ......... v-wrapper-hestia-api
 #author: ......... sahsanu
-#version: ........ 0.4
+#version: ........ 0.5
 #date: ........... 2023-September-10
 #compatibility: .. HestiaCP 1.8.x (it could work in previous versions but I've not tested it)
 
@@ -211,6 +211,12 @@ arguments="$((narguments - 1))"
 #-------------------------------#
 #            Checks             #
 #-------------------------------#
+
+# Show help if narguments is 0
+if [[ "$narguments" -eq 0 ]]; then
+	_help
+	exit 0
+fi
 
 # Check if conf file exists in user home
 conf_file="${HOME}/${name_conf_file}"
