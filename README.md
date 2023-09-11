@@ -206,7 +206,7 @@ Copy it and you are ready to use it. Using this method, you will be able to use 
 
 ### Add your client ip to allowed ips to access API
 
-By default, Hestia only allows ip `127.0.0.1` to connect to API so if you want to connect from an external client, you must add your client ip to API_ALLOWED_IP.
+By default, Hestia doesn't allow any ip to connect to API so if you want to connect from an external client, you must add your client ip to API_ALLOWED_IP.
 
 Using Web UI: 
 `Server Settings` -> `Configure` -> `Security` -> `System` -> `Allowed IP addresses for API` -> `Add your client ip in a new line` -> `Save`
